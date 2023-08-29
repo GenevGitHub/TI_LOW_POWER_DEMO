@@ -222,7 +222,7 @@ static void UART_Read(uint8_t *message, uint8_t size)
 
 static void rxCallback(UART_Handle UART_handle, void *rxBuf, size_t size)
 {
-  //Do Anything u want
+    //Do Anything u want
     RxControl(((uint8_t *)rxBuf)[0]);
     UART_Read(&receivedByte,1);
 }
@@ -232,9 +232,8 @@ static void txCallback(UART_Handle UART_handle, void *rxBuf, size_t size)
   //Do Anything u want
 }
 
-/*
- *  ======== mainThread ========-
- */
+static void ButtonControl();
+
 uint8_t counter = 0;
 
 static Clock_Handle timer;
@@ -244,43 +243,159 @@ static Error_Block eb;
 
 uint8_t btvalue = 0xFF;
 bool buttonPressed = false;
+bool bootSuccess = false;
+uint8_t bootProcess = 0xFF;
 
-static void ButtonControl();
+uint8_t messageid;
+uint8_t pressed;
+uint8_t logicLevel = 0xFF;
+uint8_t fail = 0;
+void motorcontrol_singleButtonCB(uint8_t messageID)
+{
+   // for debugging only
+    if (messageID == 0x01)
+    {
+
+        messageid = messageID;
+        if(PIN_getInputValue(Board_PIN_BUTTON0) == 0)
+        {
+            bootSuccess = true;
+        }
+        else
+        {
+            //button_Counter_Stop();
+            bootSuccess = false;
+            bootProcess = 0xFF;
+            fail = 1;
+        }
+    }
+    else if (messageID == 0x02)
+    {
+        messageid = messageID;
+    }
+    else if (messageID == 0x03)
+    {
+        messageid = messageID;
+    }
+    else if (messageID == 0x04)
+    {
+        messageid = messageID;
+    }
+    else if(messageID == 0x05)
+    {
+        messageid = messageID;
+    }
+    else if (messageID == 0x00)
+    {
+        messageid = messageID;
+    }
+}
+
+uint32_t timerPeriod;
+uint8_t risingEdgeCount = 0;    // make this static if not debugging
+uint8_t fallingEdgeCount = 0;   // make this static if not debugging
+static uint8_t buttonBehavior = 0x00; //It's a default waiting state!!!!
 
 void button_Counter_init()
 {
-    clockTicks = 500 * (1000 / Clock_tickPeriod) -1 ;
+    clockTicks = 1500 * (1000 / Clock_tickPeriod) -1 ;
     timer = Clock_create(ButtonControl,clockTicks,&clkParams, &eb);
     Clock_Params_init(&clkParams);
-    clkParams.period = clockTicks;
+    clkParams.period = 0;
     clkParams.startFlag = FALSE;
     clkParams.arg = (UArg)0x0000;
-    Clock_setTimeout(timer, clockTicks);
-    Clock_setPeriod(timer, clockTicks);
+    //Clock_setTimeout(timer, clockTicks);
+    //Clock_setPeriod(timer, clockTicks);
+}
+
+void button_Counter_SetPeriod(uint32_t clockTimeout)
+{
+   uint32_t ticks = clockTimeout*(1000/Clock_tickPeriod)-1;
+   Clock_setTimeout(timer,ticks);
+}
+
+void button_Counter_Start()
+{
+  Clock_start(timer);
+}
+
+void button_Counter_Stop()
+{
+  Clock_stop(timer);
 }
 
 uint8_t seconds = 0;
 uint8_t time_elapsed = 0;
-bool bootSuccess = false;
-uint8_t fail = 0;
+uint8_t buttonEvent = 0x00;
+/*Timer IRQ Handler*/
 static void ButtonControl()
 {
-    if (PIN_getInputValue(Board_PIN_BUTTON0) == 0)
+    button_Counter_Stop();
+    if(risingEdgeCount == 0 && fallingEdgeCount == 1)
     {
-        seconds++;
-        if(seconds == 3)
-        {
-            bootSuccess = true;
-            Clock_stop(timer);
-            /*We could initialize the peripheral now! We must not initialize any peripherals if PIN != 0 within 1.5 seconds  !!*/
-        }
+        buttonEvent = 0x01;
     }
-    else if(PIN_getInputValue(Board_PIN_BUTTON0) == 1)
+    else if (risingEdgeCount == 1 && fallingEdgeCount == 1)
     {
-        bootSuccess = false;
-        time_elapsed++;
-        fail = 1;
+        buttonEvent = 0x02;                             //callback -> lightControl_change();
     }
+    // TOGGLE BLE Advertising
+    else if (risingEdgeCount == 1 && fallingEdgeCount == 2)
+    {
+        buttonEvent = 0x03;
+    }
+    // CHANGE SPEED MODE
+    else if (risingEdgeCount == 2 && fallingEdgeCount == 2)
+    {
+        buttonEvent = 0x04;
+    }
+    // TOGGLE UNITS METRIC/IMPERIAL
+    else if (risingEdgeCount == 3 && fallingEdgeCount == 3)
+    {
+        buttonEvent = 0x05;
+    }
+    // DO NOTHING
+    else
+    {
+        buttonEvent = 0x00;
+    }
+    timerPeriod = 1500; //SINGLE_BUTTON_TIMER_OV_TIME_LONG
+    risingEdgeCount = 0;   // reset to 0
+    fallingEdgeCount = 0;   // reset to 0
+    buttonBehavior = 0x00; //SINGLE_BUTTON_WAITING_STATE
+    motorcontrol_singleButtonCB(buttonEvent);
+}
+
+void singleButton_processButtonEvt(uint8_t logicLevel)
+{
+    if(logicLevel == 0)
+    {
+        fallingEdgeCount++;
+    }
+    if(fallingEdgeCount == 0)    // Ignores the rising edge after a long press
+    {
+        risingEdgeCount = 0;
+        return;
+    }
+    if(logicLevel == 1)
+    {
+        risingEdgeCount++;
+    }
+    if(buttonBehavior == 0x00) //SINGLE_BUTTON_WAITING_STATE
+    {
+        buttonBehavior = 0x01; //SINGLE_BUTTON_EXECUTING_STATE
+        timerPeriod = 1500; //SINGLE_BUTTON_TIMER_OV_TIME_LONG
+        button_Counter_SetPeriod(timerPeriod);
+        button_Counter_Start();
+    }
+    else if(buttonBehavior == 0x01)
+    {
+        timerPeriod = 500; //SINGLE_BUTTON_TIMER_OV_TIME_SHORT
+        button_Counter_Stop();
+        button_Counter_SetPeriod(timerPeriod);
+        button_Counter_Start();
+    }
+
 }
 
 uint32_t resetSource = 0xFFFF;
@@ -300,42 +415,38 @@ PIN_Config button[] = {
       PIN_TERMINATE
 };
 
-uint8_t bootProcess = 0xFF;
+
 void *mainThread(void *arg0)
 {
 
     GPIO_setConfig(Board_GPIO_LED0, GPIO_CFG_OUT_STD | GPIO_CFG_OUT_LOW);
     resetSource =  SysCtrlResetSourceGet();
-    button_Counter_init();
-    Clock_start(timer);
-    buttonVerify = PIN_open(&buttonState, button);
+    /*Boot check starts*/
+    button_Counter_init(); /*Equivalent to UDHAL_BootChecking_Start() */
+    buttonVerify = PIN_open(&buttonState, button); /*Equivalent to UDHAL_BootChecking_Start() */
     /*Start booting process here!!!!*/
     if(resetSource == RSTSRC_WAKEUP_FROM_SHUTDOWN)
     {
-        bootProcess = 0x01;
         while(bootSuccess == false)
         {
-            if(bootSuccess == true)
+            logicLevel = PIN_getInputValue(Board_PIN_BUTTON0);
+            if(logicLevel == 0 && bootProcess == 0xFF)
             {
-                   PIN_close(buttonVerify);
-                   break;
+                 singleButton_processButtonEvt(logicLevel);
+                 bootProcess = 0x01;
+                 if(bootSuccess == true)
+                 {
+                     break;
+                 }
             }
-            if(time_elapsed == 3)
+            if(fail == 1)
             {
-                Clock_stop(timer);
-                break;
+                /* Configure DIO for wake up from shutdown */
+                pinConfig = PINCC26XX_setWakeup(ExternalWakeUpPin); /*The system resets (REBOOTS) automatically*/
+                Power_shutdown(0, 0);
+                while(1);
             }
         }
-        /*Generates a small pulse to wake up STM32 */
-        /*It's expected that the GPIO pin injects a rising edge / falling edge pulses to the slave device*/
-        pulse = PIN_open(&pulseState,pulseGenerator);
-        PIN_setOutputValue(pulse,Board_DIO15,1);
-        waitMS(50);
-        PIN_setOutputValue(pulse,Board_DIO15,0);
-        /*Deactivates*/
-        PIN_close(pulse);
-
-        /*Config GPIO and Count for 1.5 seconds!! Otherwise, back to deep sleep mode again!! */
     }
     else if (resetSource == RSTSRC_PWR_ON)
     {
@@ -346,15 +457,7 @@ void *mainThread(void *arg0)
          bootProcess = 0x03;
     }
 
-    if(fail == 1)
-    {
-        /* Configure DIO for wake up from shutdown */
-        pinConfig = PINCC26XX_setWakeup(ExternalWakeUpPin); /*The system resets (REBOOTS) automatically*/
-        Power_shutdown(0, 0);
-        while(1);
-    }
     /*Start System Control !!!*/
-
     GPIO_setConfig(Board_GPIO_LED1, GPIO_CFG_OUT_STD | GPIO_CFG_OUT_LOW);
 
     GPIO_write(Board_GPIO_LED1, 0);   // test LED
